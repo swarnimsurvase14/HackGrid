@@ -54,3 +54,5 @@ next-env.d.ts
 # uploads
 backend/uploads/
 uploads/
+
+.env
