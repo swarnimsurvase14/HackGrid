@@ -9,6 +9,9 @@ on:
       - main
 
 jobs:
+  # ---------------------------------------------------------------
+  # CI: runs on GitHub's own servers for every push and pull request
+  # ---------------------------------------------------------------
   build-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -37,24 +40,72 @@ jobs:
       - name: Run Build
         run: npm run build
 
-  deploy-aws:
+  # Proves that both Dockerfiles build on a clean machine (main branch only).
+  # No registry push happens here.
+  build-images:
     needs: build-and-test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        
+
       - name: Build Frontend Image
         run: docker build -t hackathon-frontend .
-        
+
       - name: Build Backend Image
         run: docker build -t hackathon-backend ./backend
-        
-      - name: Log in to Docker Hub (or ECR)
-        # Placeholder for registry login
-        run: echo "Login to registry..."
-        
-      - name: Push Docker Image
-        # Placeholder for registry push
-        run: echo "Pushing image..."
+
+  # ---------------------------------------------------------------
+  # CD: deploys the new frontend to the local minikube cluster.
+  #
+  # This job runs on a SELF-HOSTED runner (your laptop), because a
+  # minikube cluster is not reachable from GitHub's servers.
+  # It is skipped unless the repository variable DEPLOY_K8S is "true".
+  # ---------------------------------------------------------------
+  deploy-k8s:
+    needs: build-and-test
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_K8S == 'true' }}
+    runs-on: [self-hosted, Windows]
+    env:
+      IMAGE: docker.io/hackgrid/hackathon-frontend:${{ github.sha }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build frontend image
+        shell: powershell
+        env:
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+          NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
+          NEXT_PUBLIC_BACKEND_URL: ${{ secrets.NEXT_PUBLIC_BACKEND_URL }}
+        run: |
+          docker build -t $env:IMAGE `
+            --build-arg NEXT_PUBLIC_FIREBASE_API_KEY `
+            --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN `
+            --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID `
+            --build-arg NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET `
+            --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID `
+            --build-arg NEXT_PUBLIC_FIREBASE_APP_ID `
+            --build-arg NEXT_PUBLIC_BACKEND_URL `
+            .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Load image into minikube
+        shell: powershell
+        run: |
+          minikube image load $env:IMAGE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Roll out new version
+        shell: powershell
+        run: |
+          kubectl set image deployment/frontend-deployment frontend=$env:IMAGE -n hackathon
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          kubectl rollout status deployment/frontend-deployment -n hackathon --timeout=240s
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          kubectl get pods -n hackathon

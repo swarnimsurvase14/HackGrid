@@ -93,7 +93,7 @@ export default function ParticipantLogin() {
               <span className="text-slate-900">HACK</span>
               <span className="text-blue-600">GRID</span>
             </div>
-            <h2 className="text-2xl font-extrabold text-slate-900">Sign in to HackGrid</h2>
+            <h2 className="text-2xl font-extrabold text-slate-900">Sign in to HackGrid (CD Test)</h2>
             <p className="text-sm text-slate-500 mt-2">
               Join HackGrid 2026 and build your team. Continue with your account to get started.
             </p>
